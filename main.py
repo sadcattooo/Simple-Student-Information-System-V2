@@ -208,9 +208,9 @@ def save_student():
         if new_college:
             dm.update_college_student_count(new_college, student_table, college_table)
 
-    dm.save_all_to_csv(student_table)
-    dm.save_programs_to_csv(program_table)
-    dm.save_colleges_to_csv(college_table)
+    dm.save_students(student_table)
+    dm.save_programs(program_table)
+    dm.save_colleges(college_table)
 
     for widget in [sid, fname, mname, lname, cnumber, email, address]:
         widget.delete(0, END)
@@ -243,7 +243,7 @@ def save_college():
             return
 
     college_table.insert("", "end", values=(cid, cname, "0", "0"))
-    dm.save_colleges_to_csv(college_table)
+    dm.save_colleges(college_table)
     refresh_college_comboboxes()
     refresh_programs()
 
@@ -277,7 +277,7 @@ def save_program():
             return
 
     program_table.insert("", "end", values=(pid, pname, cname, "0"))
-    dm.save_programs_to_csv(program_table)
+    dm.save_programs(program_table)
 
     if college_cb.get() == cname:
         current_programs = list(program_cb["values"])
@@ -353,18 +353,18 @@ def delete_item():
                     dm.update_program_student_count(prog, student_table, program_table)
                 if coll:
                     dm.update_college_student_count(coll, student_table, college_table)
-                dm.save_all_to_csv(student_table)
-                dm.save_programs_to_csv(program_table)
-                dm.save_colleges_to_csv(college_table)
+                dm.save_students(student_table)
+                dm.save_programs(program_table)
+                dm.save_colleges(college_table)
             else:
                 current_table.delete(item)
 
     if current_table == student_table:
-        dm.save_all_to_csv(student_table)
+        dm.save_students(student_table)
     elif current_table == program_table:
-        dm.save_programs_to_csv(program_table)
+        dm.save_programs(program_table)
     elif current_table == college_table:
-        dm.save_colleges_to_csv(college_table)
+        dm.save_colleges(college_table)
 
 
 def search_current():
@@ -416,11 +416,11 @@ def clear_list():
     if warn:
         current_table.delete(*current_table.get_children())
         if current_table == student_table:
-            dm.save_all_to_csv(student_table)
+            dm.save_students(student_table)
         elif current_table == program_table:
-            dm.save_programs_to_csv(program_table)
+            dm.save_programs(program_table)
         elif current_table == college_table:
-            dm.save_colleges_to_csv(college_table)
+            dm.save_colleges(college_table)
 
 
 def update_programs(event):
@@ -553,7 +553,7 @@ def on_tree_click(event):
 
 
 def on_closing():
-    dm.save_all_to_csv(student_table)
+    dm.save_students(student_table)
     window.destroy()
 
 

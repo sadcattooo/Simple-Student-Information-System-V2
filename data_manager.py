@@ -93,3 +93,49 @@ def load_students(student_table, update_all_program_counts, update_all_college_c
 
     update_all_program_counts()
     update_all_college_counts()
+
+
+
+# Save Students, Program, College
+def save_students(student_table):
+    try:
+        rows = [student_table.item(c)["values"][:10]
+                for c in student_table.get_children()]
+        with get_connection() as conn:
+            conn.execute("DELETE FROM student")
+            conn.executemany(
+                "INSERT INTO student"
+                "(id,name,year_level,program,college,dob,sex,contact,email,address)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                rows,
+            )
+    except Exception as e:
+        messagebox.showerror("Save Failed", f"Cannot save students\n\n{e}")
+
+
+def save_programs(program_table):
+    try:
+        rows = [program_table.item(c)["values"][:3]
+                for c in program_table.get_children()]
+        with get_connection() as conn:
+            conn.execute("DELETE FROM program")
+            conn.executemany(
+                "INSERT OR IGNORE INTO program(code,name,college_code) VALUES(?,?,?)",
+                rows,
+            )
+    except Exception as e:
+        messagebox.showerror("Save Failed", f"Cannot save programs\n\n{e}")
+
+
+def save_colleges(college_table):
+    try:
+        rows = [college_table.item(c)["values"][:2]
+                for c in college_table.get_children()]
+        with get_connection() as conn:
+            conn.execute("DELETE FROM college")
+            conn.executemany(
+                "INSERT OR IGNORE INTO college(code,name) VALUES(?,?)",
+                rows,
+            )
+    except Exception as e:
+        messagebox.showerror("Save Failed", f"Cannot save colleges\n\n{e}")
