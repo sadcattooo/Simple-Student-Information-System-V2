@@ -982,10 +982,10 @@ student_table.bind("<Button-1>", on_tree_click)
 # ── Load data ────────────────────────────────────────────────
 dm.load_colleges(college_table)
 dm.load_programs(program_table)
-dm.load_students_from_csv(
+dm.load_students(
     student_table,
-    update_all_program_counts_fn=lambda: dm.update_all_program_counts(student_table, program_table),
-    update_all_college_counts_fn=lambda: dm.update_all_college_counts(student_table, college_table)
+    update_all_program_counts=lambda: dm.update_all_program_counts(student_table, program_table),
+    update_all_college_counts=lambda: dm.update_all_college_counts(student_table, college_table)
 )
 
 refresh_college_comboboxes()
