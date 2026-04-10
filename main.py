@@ -2,18 +2,17 @@ import tkinter
 from tkinter import *
 from tkinter import messagebox
 from tkinter import ttk
-from tkinter.ttk import Combobox, Treeview
+from tkinter.ttk import Combobox
 from config import SORT_OPTIONS
 from ui_helpers import validate_student_id_action, auto_format_student_id, treeview_sort_column, update_dob_days
 import data_manager as dm
 from tkinter.ttk import Style
-from tkinter import PhotoImage
+
 
 editing_iid = None
 current_view = "students"
 
-
-
+dm.init_db()
 
 # ─────────────────────────────────────────────────────────────
 #  FUNCTIONS
@@ -979,17 +978,19 @@ for col in ["DOB", "Sex", "Contact", "Email", "Address"]:
 student_table.pack(side=LEFT, fill=BOTH, expand=True)
 student_table.bind("<Button-1>", on_tree_click)
 
+
+
 # ── Load data ────────────────────────────────────────────────
 dm.load_colleges(college_table)
 dm.load_programs(program_table)
 dm.load_students(
     student_table,
-    update_all_program_counts=lambda: dm.update_all_program_counts(student_table, program_table),
-    update_all_college_counts=lambda: dm.update_all_college_counts(student_table, college_table)
+    update_all_program_counts_fn=lambda: dm.update_all_program_counts(student_table, program_table),
+    update_all_college_counts_fn=lambda: dm.update_all_college_counts(student_table, college_table)
 )
 
 refresh_college_comboboxes()
 refresh_programs()
 
-window.protocol("WM_DELETE_WINDOW", on_closing)
+window.protocol("DELETE WINDOW", on_closing)
 window.mainloop()
