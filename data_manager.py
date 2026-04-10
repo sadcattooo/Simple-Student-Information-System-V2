@@ -1,9 +1,9 @@
 import sqlite3
 from pathlib import Path
 from tkinter import messagebox
+from config import SEED_COLLEGES, SEED_PROGRAMS, SEED_FIRSTNAMES, SEED_LASTNAMES
 
-DB_PATH = Path(__file__).parent / "app.db"
-
+DB_PATH = Path(__file__).resolve().parent / "app.db"
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -41,10 +41,43 @@ def init_db():
                 address     TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS history (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                action    TEXT NOT NULL,
+                entity    TEXT NOT NULL,
+                details   TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_student_program ON student(program);
             CREATE INDEX IF NOT EXISTS idx_student_college ON student(college);
             CREATE INDEX IF NOT EXISTS idx_program_college ON program(college_code);
         """)
+
+
+# ── History ───────────────────────────────────────────────────
+
+def log_action(action: str, entity: str, details: str):
+    """Log an action to the history table. action: Added/Edited/Deleted. entity: Student/Program/College."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO history(timestamp, action, entity, details) VALUES (?,?,?,?)",
+            (timestamp, action, entity, details)
+        )
+
+
+def load_history():
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT timestamp, action, entity, details FROM history ORDER BY id DESC"
+        ).fetchall()
+
+
+def clear_history():
+    with get_connection() as conn:
+        conn.execute("DELETE FROM history")
 
 
 # ── Load ──────────────────────────────────────────────────────
@@ -108,13 +141,15 @@ def save_students(student_table):
         rows = [student_table.item(c)["values"][:10]
                 for c in student_table.get_children()]
         with get_connection() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("DELETE FROM student")
             conn.executemany(
-                "INSERT INTO student"
+                "INSERT OR REPLACE INTO student"
                 "(id, name, year_level, program, college, dob, sex, contact, email, address)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 rows,
             )
+            conn.execute("PRAGMA foreign_keys = ON")
     except Exception as e:
         messagebox.showerror("Save Failed", f"Cannot save students\n\n{e}")
 
@@ -124,11 +159,13 @@ def save_programs(program_table):
         rows = [program_table.item(c)["values"][:3]
                 for c in program_table.get_children()]
         with get_connection() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("DELETE FROM program")
             conn.executemany(
-                "INSERT OR IGNORE INTO program(code, name, college_code) VALUES (?,?,?)",
+                "INSERT OR REPLACE INTO program(code, name, college_code) VALUES (?,?,?)",
                 rows,
             )
+            conn.execute("PRAGMA foreign_keys = ON")
     except Exception as e:
         messagebox.showerror("Save Failed", f"Cannot save programs\n\n{e}")
 
@@ -138,16 +175,18 @@ def save_colleges(college_table):
         rows = [college_table.item(c)["values"][:2]
                 for c in college_table.get_children()]
         with get_connection() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("DELETE FROM college")
             conn.executemany(
-                "INSERT OR IGNORE INTO college(code, name) VALUES (?,?)",
+                "INSERT OR REPLACE INTO college(code, name) VALUES (?,?)",
                 rows,
             )
+            conn.execute("PRAGMA foreign_keys = ON")
     except Exception as e:
         messagebox.showerror("Save Failed", f"Cannot save colleges\n\n{e}")
 
 
-# ── Count helpers ─────────────────────────────────────────────
+# ── Data Count ─────────────────────────────────────────────
 
 def update_program_student_count(program_name, student_table, program_table):
     if not program_name:
@@ -199,3 +238,63 @@ def update_all_college_counts(student_table, college_table):
         v = college_table.item(c)["values"]
         college_table.item(c, values=(v[0], v[1], v[2],
                                       str(counts.get(str(v[1]).strip(), 0))))
+
+
+# ── seed ──────────────────────────────────────────────────────
+
+def seed_db():
+    """Pre-populate colleges, programs, and 5000 students. Skips if already seeded."""
+    import random
+
+    with get_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executemany(
+            "INSERT OR IGNORE INTO college(code, name) VALUES (?,?)", SEED_COLLEGES
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO program(code, name, college_code) VALUES (?,?,?)", SEED_PROGRAMS
+        )
+
+        count = conn.execute("SELECT COUNT(*) FROM student").fetchone()[0]
+        if count < 5000:
+            year_levels = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
+            sexes       = ["Male", "Female", "Other"]
+            existing    = {r[0] for r in conn.execute("SELECT id FROM student").fetchall()}
+            batch = []
+
+            for _ in range(5000 - count):
+                yr  = random.randint(2019, 2024)
+                seq = random.randint(1, 9999)
+                sid = f"{yr}-{seq:04d}"
+                while sid in existing:
+                    seq = random.randint(1, 9999)
+                    sid = f"{yr}-{seq:04d}"
+                existing.add(sid)
+
+                prog_code, prog_name, col_code = random.choice(SEED_PROGRAMS)
+                col_name   = next(c[1] for c in SEED_COLLEGES if c[0] == col_code)
+                fullname   = f"{random.choice(SEED_FIRSTNAMES)} {random.choice(SEED_LASTNAMES)}"
+                year_level = random.choice(year_levels)
+                sex        = random.choices(sexes, weights=[48, 48, 4])[0]
+
+                batch.append((sid, fullname, year_level, prog_name, col_name,
+                              "", sex, "", "", ""))
+
+                if len(batch) >= 500:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO student"
+                        "(id,name,year_level,program,college,dob,sex,contact,email,address)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        batch
+                    )
+                    batch.clear()
+
+            if batch:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO student"
+                    "(id,name,year_level,program,college,dob,sex,contact,email,address)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    batch
+                )
+
+        conn.execute("PRAGMA foreign_keys = ON")

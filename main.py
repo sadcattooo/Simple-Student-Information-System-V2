@@ -2,21 +2,27 @@ import tkinter
 from tkinter import *
 from tkinter import messagebox
 from tkinter import ttk
-from tkinter.ttk import Combobox
+from tkinter.ttk import Combobox, Treeview
 from config import SORT_OPTIONS
 from ui_helpers import validate_student_id_action, auto_format_student_id, treeview_sort_column, update_dob_days
 import data_manager as dm
 from tkinter.ttk import Style
+from tkinter import PhotoImage
 
-
+original_orders = {}
 editing_iid = None
 current_view = "students"
-
-dm.init_db()
 
 # ─────────────────────────────────────────────────────────────
 #  FUNCTIONS
 # ─────────────────────────────────────────────────────────────
+def get_college_code_by_name(college_name):
+    for child in college_table.get_children():
+        values = college_table.item(child)["values"]
+        if str(values[1]).strip() == college_name.strip():
+            return str(values[0]).strip()  # return code
+    return None
+
 
 def sort_current_table(*args):
     if current_view == "students":
@@ -222,6 +228,8 @@ def save_student():
     add_student_frame.grid_remove()
     bot_btn.config(text="Save", command=save_student)
 
+    action = "Edited" if msg.startswith("Student updated") else "Added"
+    dm.log_action(action, "Student", f"{values[1]} (ID: {values[0]})")
     messagebox.showinfo("Success", msg)
     editing_iid = None
 
@@ -249,6 +257,7 @@ def save_college():
     college_id_entry.delete(0, END)
     college_name_entry.delete(0, END)
     add_college_frame.grid_remove()
+    dm.log_action("Added", "College", f"{cname} ({cid})")
     messagebox.showinfo("Success", "College added successfully!")
 
 
@@ -256,6 +265,13 @@ def save_program():
     pid   = prog_id_entry.get().strip()
     pname = prog_name_entry.get().strip()
     cname = prog_college_cb.get().strip()
+
+    college_code = None
+    for child in college_table.get_children():
+        values = college_table.item(child)["values"]
+        if values[1] == cname:
+            college_code = values[0]
+            break
 
     if not pid or not pname or not cname:
         messagebox.showwarning("Missing", "All fields are required.")
@@ -275,7 +291,7 @@ def save_program():
             prog_name_entry.focus_set()
             return
 
-    program_table.insert("", "end", values=(pid, pname, cname, "0"))
+    program_table.insert("", "end", values=(pid, pname, college_code, "0"))
     dm.save_programs(program_table)
 
     if college_cb.get() == cname:
@@ -291,6 +307,7 @@ def save_program():
     refresh_college_comboboxes()
     refresh_programs()
     add_program_frame.grid_remove()
+    dm.log_action("Added", "Program", f"{pname} ({pid}) — {cname}")
     messagebox.showinfo("Success", "Program added successfully!")
 
 
@@ -344,6 +361,7 @@ def delete_item():
         name = values[1] if len(values) > 1 else ""
         confirm = messagebox.askyesno("Confirm Delete", f"Delete {item_type.capitalize()}: {name}?")
         if confirm:
+            dm.log_action("Deleted", item_type.capitalize(), str(name))
             if current_table == student_table:
                 prog = values[3].strip() if len(values) > 3 else ""
                 coll = values[4].strip() if len(values) > 4 else ""
@@ -368,8 +386,6 @@ def delete_item():
 
 def search_current():
     query = search_entry.get().lower()
-    if not query:
-        return
 
     current_tree = None
     if student_framebtn.winfo_ismapped():
@@ -379,14 +395,35 @@ def search_current():
     elif college_framebtn.winfo_ismapped():
         current_tree = college_table
 
-    if current_tree:
+    if not current_tree:
+        return
+
+    children = list(current_tree.get_children())
+
+    if not query:
+        if current_tree in original_orders:
+            for index, iid in enumerate(original_orders[current_tree]):
+                if iid in current_tree.get_children():
+                    current_tree.move(iid, "", index)
+
         current_tree.selection_remove(current_tree.selection())
-        matches = []
-        for child in current_tree.get_children():
-            values = ' '.join(map(str, current_tree.item(child)['values'])).lower()
-            if query in values:
-                matches.append(child)
-        current_tree.selection_set(matches)
+        
+        return
+
+    matches = []
+    non_matches = []
+
+    for child in children:
+        values = ' '.join(map(str, current_tree.item(child)['values'])).lower()
+        if query in values:
+            matches.append(child)
+        else:
+            non_matches.append(child)
+
+    for index, iid in enumerate(matches + non_matches):
+        current_tree.move(iid, "", index)
+
+    current_tree.selection_set(matches)
 
 
 def clear_list():
@@ -423,23 +460,29 @@ def clear_list():
 
 
 def update_programs(event):
-    selected_college = college_cb.get().strip()
-    if not selected_college:
+    selected_college_name = college_cb.get().strip()
+
+    if not selected_college_name:
         program_cb["values"] = []
         program_cb.set("")
         program_cb.config(state="disabled")
         return
 
+    selected_college_code = get_college_code_by_name(selected_college_name)
+
     programs = []
     for child in program_table.get_children():
         values = program_table.item(child)["values"]
+
         if len(values) >= 4:
-            college_value = values[2] if len(values) > 2 else ""
-            if str(college_value).strip() == selected_college:
+            program_college_code = str(values[2]).strip()
+
+            if program_college_code == selected_college_code:
                 programs.append(str(values[1]).strip())
 
     program_cb["values"] = sorted(programs)
     program_cb.set("")
+
     program_cb.config(state="readonly" if programs else "disabled")
 
 
@@ -556,6 +599,71 @@ def on_closing():
     window.destroy()
 
 
+def show_history():
+    rows = dm.load_history()
+
+    hist_win = Toplevel(window)
+    hist_win.title("Action History")
+    hist_win.geometry("720x480")
+    hist_win.configure(bg="#fbfcfc")
+
+    header = tkinter.Frame(hist_win, bg="#055b65", pady=8)
+    header.pack(fill=X)
+    Label(header, text="Action History", bg="#055b65", fg="white",
+          font=("Arial", 13, "bold"), padx=14).pack(side=LEFT)
+
+    def clear_and_refresh():
+        if messagebox.askyesno("Clear History", "Clear all history? This cannot be undone.", parent=hist_win):
+            dm.clear_history()
+            tree.delete(*tree.get_children())
+
+    tkinter.Button(header, text="Clear History", bg="#e74c3c", fg="white",
+                   font=("Arial", 9, "bold"), relief=FLAT, padx=10, pady=3,
+                   cursor="hand2", command=clear_and_refresh).pack(side=RIGHT, padx=10)
+
+    frame = tkinter.Frame(hist_win, bg="#fbfcfc")
+    frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+    yscroll = Scrollbar(frame, orient=VERTICAL)
+    yscroll.pack(side=RIGHT, fill=Y)
+
+    tree = ttk.Treeview(
+        frame,
+        style="Pastel.Treeview",
+        columns=("Timestamp", "Action", "Entity", "Details"),
+        show="headings",
+        yscrollcommand=yscroll.set
+    )
+    tree.heading("Timestamp", text="Timestamp")
+    tree.heading("Action",    text="Action")
+    tree.heading("Entity",    text="Entity")
+    tree.heading("Details",   text="Details")
+    tree.column("Timestamp", width=140, anchor="center")
+    tree.column("Action",    width=70,  anchor="center")
+    tree.column("Entity",    width=80,  anchor="center")
+    tree.column("Details",   width=380)
+    yscroll.config(command=tree.yview)
+    tree.pack(fill=BOTH, expand=True)
+
+    for i, row in enumerate(rows):
+        tag = "even" if i % 2 == 0 else "odd"
+        tree.insert("", END, values=(row[0], row[1], row[2], row[3]), tags=(tag,))
+    tree.tag_configure("odd",  background="#f5fafa")
+    tree.tag_configure("even", background="#ffffff")
+
+    if not rows:
+        Label(hist_win, text="No history yet.", bg="#fbfcfc",
+              font=("Arial", 11, "italic"), fg="#888").pack(pady=20)
+
+
+def logout():
+    if messagebox.askyesno("Logout", "Are you sure you want to exit?"):
+        dm.save_students(student_table)
+        window.destroy()
+
+def store_original_order(tree):
+    global original_orders
+    original_orders[tree] = list(tree.get_children())
 # ─────────────────────────────────────────────────────────────
 #  MAIN WINDOW SETUP
 # ─────────────────────────────────────────────────────────────
@@ -595,11 +703,6 @@ style.map("Pastel.Treeview",
 
 # Required note
 style.configure("RedNote.TLabel", font=("Segoe UI", 10, "italic"), foreground="#e74c3c")
-
-
-
-
-
 
 # ── Info and CRUDL Button Frame ──────────────────────────────
 Info_btn_frame = tkinter.Frame(window, bg="#fbfcfc")
@@ -841,6 +944,7 @@ nav_btn_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
 # ── Search Frame ─────────────────────────────────────────────
 search_entry = Entry(search_frame)
+search_entry.bind("<KeyRelease>", lambda e: search_current())
 search_entry.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 
 search_button = ttk.Button(search_frame, text="Search", style="Pastel.TButton", width=10, command=search_current)
@@ -856,10 +960,10 @@ program_btn.pack(side=TOP, fill=X, padx=5, pady=5)
 college_btn = ttk.Button(nav_btn_frame, text="College", style="Pastel.TButton", width=10, command=college_list)
 college_btn.pack(side=TOP, fill=X, padx=5, pady=5)
 
-logout_btn  = ttk.Button(nav_btn_frame, text="Logout",  style="Pastel.TButton", width=10)
+logout_btn  = ttk.Button(nav_btn_frame, text="Logout",  style="Pastel.TButton", width=10, command=logout)
 logout_btn.pack(side=BOTTOM, fill=X, padx=5, pady=5)
 
-history_btn = ttk.Button(nav_btn_frame, text="History", style="Pastel.TButton", width=10)
+history_btn = ttk.Button(nav_btn_frame, text="History", style="Pastel.TButton", width=10, command=show_history)
 history_btn.pack(side=BOTTOM, fill=X, padx=5, pady=5)
 
 add_btn    = ttk.Button(btn_frame, text="Add Student", style="Pastel.TButton", width=15,  command=add_student)
@@ -968,6 +1072,7 @@ student_table.column("Program",    width=100)
 student_table.column("College",    width=100)
 student_table.column("View",       width=80, anchor="center")
 
+y_scroll.config(command=student_table.yview)
 for col in student_table["columns"]:
     if col != "View":
         student_table.heading(col, command=lambda c=col: treeview_sort_column(student_table, c, False))
@@ -978,7 +1083,9 @@ for col in ["DOB", "Sex", "Contact", "Email", "Address"]:
 student_table.pack(side=LEFT, fill=BOTH, expand=True)
 student_table.bind("<Button-1>", on_tree_click)
 
-
+# App db with data
+dm.init_db()
+dm.seed_db()
 
 # ── Load data ────────────────────────────────────────────────
 dm.load_colleges(college_table)
@@ -989,8 +1096,12 @@ dm.load_students(
     update_all_college_counts_fn=lambda: dm.update_all_college_counts(student_table, college_table)
 )
 
+store_original_order(student_table)
+store_original_order(program_table)
+store_original_order(college_table)
+
 refresh_college_comboboxes()
 refresh_programs()
 
-window.protocol("DELETE WINDOW", on_closing)
+window.protocol("WM_DELETE_WINDOW", on_closing)
 window.mainloop()
