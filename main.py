@@ -8,21 +8,16 @@ from ui_helpers import validate_student_id_action, auto_format_student_id, treev
 import data_manager as dm
 from tkinter.ttk import Style
 from tkinter import PhotoImage
+from PIL import ImageTk, Image
 
-original_orders = {}
 editing_iid = None
 current_view = "students"
+
+
 
 # ─────────────────────────────────────────────────────────────
 #  FUNCTIONS
 # ─────────────────────────────────────────────────────────────
-def get_college_code_by_name(college_name):
-    for child in college_table.get_children():
-        values = college_table.item(child)["values"]
-        if str(values[1]).strip() == college_name.strip():
-            return str(values[0]).strip()  # return code
-    return None
-
 
 def sort_current_table(*args):
     if current_view == "students":
@@ -56,6 +51,7 @@ def update_sort_dropdown():
 
 def student_list():
     global current_view
+    _clear_search()
     student_framebtn.grid()
     program_framebtn.grid_remove()
     college_framebtn.grid_remove()
@@ -66,6 +62,7 @@ def student_list():
 
 def program_list():
     global current_view
+    _clear_search()
     program_framebtn.grid()
     student_framebtn.grid_remove()
     college_framebtn.grid_remove()
@@ -76,6 +73,7 @@ def program_list():
 
 def college_list():
     global current_view
+    _clear_search()
     college_framebtn.grid()
     student_framebtn.grid_remove()
     program_framebtn.grid_remove()
@@ -85,11 +83,13 @@ def college_list():
 
 
 def add_student():
+    refresh_college_comboboxes()
     add_student_frame.tkraise()
     add_student_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 5), pady=(5, 0), rowspan=2)
 
 
 def add_program():
+    refresh_college_comboboxes()
     add_program_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
 
@@ -216,6 +216,8 @@ def save_student():
     dm.save_students(student_table)
     dm.save_programs(program_table)
     dm.save_colleges(college_table)
+    dm.update_all_program_counts(student_table, program_table)
+    dm.update_all_college_counts(student_table, college_table)
 
     for widget in [sid, fname, mname, lname, cnumber, email, address]:
         widget.delete(0, END)
@@ -228,8 +230,6 @@ def save_student():
     add_student_frame.grid_remove()
     bot_btn.config(text="Save", command=save_student)
 
-    action = "Edited" if msg.startswith("Student updated") else "Added"
-    dm.log_action(action, "Student", f"{values[1]} (ID: {values[0]})")
     messagebox.showinfo("Success", msg)
     editing_iid = None
 
@@ -257,23 +257,15 @@ def save_college():
     college_id_entry.delete(0, END)
     college_name_entry.delete(0, END)
     add_college_frame.grid_remove()
-    dm.log_action("Added", "College", f"{cname} ({cid})")
     messagebox.showinfo("Success", "College added successfully!")
 
 
 def save_program():
     pid   = prog_id_entry.get().strip()
     pname = prog_name_entry.get().strip()
-    cname = prog_college_cb.get().strip()
+    ccode = prog_college_cb.get().strip()
 
-    college_code = None
-    for child in college_table.get_children():
-        values = college_table.item(child)["values"]
-        if values[1] == cname:
-            college_code = values[0]
-            break
-
-    if not pid or not pname or not cname:
+    if not pid or not pname or not ccode:
         messagebox.showwarning("Missing", "All fields are required.")
         return
 
@@ -286,18 +278,18 @@ def save_program():
 
     for child in program_table.get_children():
         ex_pid, ex_pname, ex_college, _ = program_table.item(child)["values"]
-        if ex_college == cname and ex_pname.lower() == pname.lower():
-            messagebox.showerror("Duplicate", f"Program '{pname}' already exists in college '{cname}'!")
+        if ex_college == ccode and ex_pname.lower() == pname.lower():
+            messagebox.showerror("Duplicate", f"Program '{pname}' already exists in college '{ccode}'!")
             prog_name_entry.focus_set()
             return
 
-    program_table.insert("", "end", values=(pid, pname, college_code, "0"))
+    program_table.insert("", "end", values=(pid, pname, ccode, "0"))
     dm.save_programs(program_table)
 
-    if college_cb.get() == cname:
+    if college_cb.get() == ccode:
         current_programs = list(program_cb["values"])
-        if pname not in current_programs:
-            current_programs.append(pname)
+        if pid not in current_programs:
+            current_programs.append(pid)
             program_cb["values"] = sorted(current_programs)
 
     prog_id_entry.delete(0, END)
@@ -307,12 +299,11 @@ def save_program():
     refresh_college_comboboxes()
     refresh_programs()
     add_program_frame.grid_remove()
-    dm.log_action("Added", "Program", f"{pname} ({pid}) — {cname}")
     messagebox.showinfo("Success", "Program added successfully!")
 
 
 def refresh_college_comboboxes():
-    colleges = [college_table.item(child)["values"][1] for child in college_table.get_children()]
+    colleges = [college_table.item(child)["values"][0] for child in college_table.get_children()]
     college_cb["values"] = colleges
     prog_college_cb["values"] = colleges
 
@@ -323,7 +314,7 @@ def refresh_programs():
         program_cb["values"] = []
         program_cb.config(state="disabled")
         return
-    programs = [program_table.item(c)["values"][1].strip()
+    programs = [program_table.item(c)["values"][0].strip()
                 for c in program_table.get_children()
                 if len(program_table.item(c)["values"]) >= 4
                 and program_table.item(c)["values"][2].strip() == selected_college]
@@ -361,7 +352,6 @@ def delete_item():
         name = values[1] if len(values) > 1 else ""
         confirm = messagebox.askyesno("Confirm Delete", f"Delete {item_type.capitalize()}: {name}?")
         if confirm:
-            dm.log_action("Deleted", item_type.capitalize(), str(name))
             if current_table == student_table:
                 prog = values[3].strip() if len(values) > 3 else ""
                 coll = values[4].strip() if len(values) > 4 else ""
@@ -373,57 +363,299 @@ def delete_item():
                 dm.save_students(student_table)
                 dm.save_programs(program_table)
                 dm.save_colleges(college_table)
-            else:
+
+            elif current_table == program_table:
+                deleted_pcode = str(values[0]).strip()
                 current_table.delete(item)
+                for child in student_table.get_children():
+                    sv = list(student_table.item(child)["values"])
+                    if str(sv[3]).strip() == deleted_pcode:
+                        sv[3] = "null"
+                        student_table.item(child, values=sv)
+                dm.update_all_college_program_counts(program_table, college_table)
+                dm.save_programs(program_table)
+                dm.save_students(student_table)
+                dm.save_colleges(college_table)
 
-    if current_table == student_table:
-        dm.save_students(student_table)
-    elif current_table == program_table:
-        dm.save_programs(program_table)
-    elif current_table == college_table:
-        dm.save_colleges(college_table)
+            elif current_table == college_table:
+                deleted_ccode = str(values[0]).strip()
+                current_table.delete(item)
+                for child in student_table.get_children():
+                    sv = list(student_table.item(child)["values"])
+                    if str(sv[4]).strip() == deleted_ccode:
+                        sv[4] = "null"
+                        student_table.item(child, values=sv)
+                for child in program_table.get_children():
+                    pv = list(program_table.item(child)["values"])
+                    if str(pv[2]).strip() == deleted_ccode:
+                        pv[2] = "null"
+                        program_table.item(child, values=pv)
+                dm.update_all_college_program_counts(program_table, college_table)
+                dm.save_colleges(college_table)
+                dm.save_programs(program_table)
+                dm.save_students(student_table)
 
 
-def search_current():
-    query = search_entry.get().lower()
-
-    current_tree = None
+def edit_item():
     if student_framebtn.winfo_ismapped():
-        current_tree = student_table
-    elif program_framebtn.winfo_ismapped():
-        current_tree = program_table
-    elif college_framebtn.winfo_ismapped():
-        current_tree = college_table
+        selected = student_table.selection()
+        if not selected:
+            messagebox.showinfo("Info", "No student selected!")
+            return
+        iid = selected[0]
+        values = student_table.item(iid)["values"]
+        if not values or len(values) < 10:
+            messagebox.showinfo("Info", "Could not load student data.")
+            return
+        global editing_iid
+        editing_iid = iid
 
-    if not current_tree:
+        sid.delete(0, END); sid.insert(0, values[0])
+        name = str(values[1]).strip()
+        parts = name.split()
+        fname_val = parts[0] if parts else ""
+        lname_val = parts[-1] if len(parts) > 1 else ""
+        middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+        mname_val = middle.rstrip(".") if middle.endswith(".") else middle
+
+        fname.delete(0, END); fname.insert(0, fname_val)
+        mname.delete(0, END); mname.insert(0, mname_val)
+        lname.delete(0, END); lname.insert(0, lname_val)
+
+        dob_str = str(values[5]).strip() if len(values) > 5 else ""
+        if dob_str and len(dob_str) == 10 and dob_str[4] == "-" and dob_str[7] == "-":
+            try:
+                year, month, day = dob_str.split("-")
+                dob_year_cb.set(year); dob_month_cb.set(month); dob_day_cb.set(day)
+                update_dob_days(dob_year_cb, dob_month_cb, dob_day_cb)
+            except Exception:
+                dob_year_cb.set(""); dob_month_cb.set(""); dob_day_cb.set("")
+        else:
+            dob_year_cb.set(""); dob_month_cb.set(""); dob_day_cb.set("")
+
+        sex.set(values[6] if len(values) > 6 else "")
+        cnumber.delete(0, END); cnumber.insert(0, values[7] if len(values) > 7 else "")
+        email.delete(0, END);   email.insert(0, values[8] if len(values) > 8 else "")
+        address.delete(0, END); address.insert(0, values[9] if len(values) > 9 else "")
+        year_cb.set(values[2] if len(values) > 2 else "")
+        college_cb.set(values[4] if len(values) > 4 else "")
+        refresh_college_comboboxes()
+        update_programs(None)
+        program_cb.set(values[3] if len(values) > 3 else "")
+
+        add_student_frame.tkraise()
+        add_student_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 5), pady=(5, 0), rowspan=2)
+        bot_btn.config(text="Update", command=save_student)
+
+    elif program_framebtn.winfo_ismapped():
+        selected = program_table.selection()
+        if not selected:
+            messagebox.showinfo("Info", "No program selected!")
+            return
+        iid = selected[0]
+        values = program_table.item(iid)["values"]
+        prog_id_entry.delete(0, END);   prog_id_entry.insert(0, values[0])
+        prog_name_entry.delete(0, END); prog_name_entry.insert(0, values[1])
+        refresh_college_comboboxes()
+        prog_college_cb.set(str(values[2]).strip())
+
+        def save_edited_program():
+            pid   = prog_id_entry.get().strip()
+            pname = prog_name_entry.get().strip()
+            new_ccode = prog_college_cb.get().strip()
+            if not pid or not pname or not new_ccode:
+                messagebox.showwarning("Missing", "All fields are required.")
+                return
+            for child in program_table.get_children():
+                if child != iid and program_table.item(child)["values"][0] == pid:
+                    messagebox.showerror("Duplicate", f"Program Code '{pid}' already exists!")
+                    return
+
+            old_pid   = str(values[0]).strip()
+            old_ccode = str(values[2]).strip()
+
+            # Recount students currently in this program (by old code, before any rename)
+            current_count = sum(
+                1 for c in student_table.get_children()
+                if str(student_table.item(c)["values"][3]).strip() == old_pid
+            )
+
+            program_table.item(iid, values=(pid, pname, new_ccode, str(current_count)))
+            dm.save_programs(program_table)
+
+            # Cascade: program code changed → update student program column
+            if old_pid != pid:
+                for child in student_table.get_children():
+                    sv = list(student_table.item(child)["values"])
+                    if str(sv[3]).strip() == old_pid:
+                        sv[3] = pid
+                        student_table.item(child, values=sv)
+                dm.cascade_rename_program(old_pid, pid)
+
+            # Cascade: college changed → update student college column for this program
+            if new_ccode != old_ccode and old_ccode and new_ccode:
+                for child in student_table.get_children():
+                    sv = list(student_table.item(child)["values"])
+                    if str(sv[3]).strip() == pid and str(sv[4]).strip() == old_ccode:
+                        sv[4] = new_ccode
+                        student_table.item(child, values=sv)
+                with dm.get_connection() as conn:
+                    conn.execute(
+                        "UPDATE student SET college = ? WHERE program = ? AND college = ?",
+                        (new_ccode, pid, old_ccode)
+                    )
+
+            dm.save_students(student_table)
+            dm.update_all_college_program_counts(program_table, college_table)
+            dm.update_all_program_counts(student_table, program_table)
+            dm.update_all_college_counts(student_table, college_table)
+            dm.log_action("Edited", "Program", f"{pname} ({pid})")
+            refresh_college_comboboxes()
+            refresh_programs()
+            add_program_frame.grid_remove()
+            _reset_prog_buttons()
+            messagebox.showinfo("Success", "Program updated successfully!")
+
+        for w in btn_frame_prog.winfo_children():
+            w.destroy()
+        ttk.Button(btn_frame_prog, text="Update", style="Pastel.TButton",
+                   command=save_edited_program).pack(side=RIGHT, padx=10)
+        ttk.Button(btn_frame_prog, text="Cancel", style="Pastel.TButton",
+                   command=lambda: [add_program_frame.grid_remove(),
+                                    _reset_prog_buttons()]).pack(side=RIGHT, padx=10)
+        add_program_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+    elif college_framebtn.winfo_ismapped():
+        selected = college_table.selection()
+        if not selected:
+            messagebox.showinfo("Info", "No college selected!")
+            return
+        iid = selected[0]
+        values = college_table.item(iid)["values"]
+        college_id_entry.delete(0, END);   college_id_entry.insert(0, values[0])
+        college_name_entry.delete(0, END); college_name_entry.insert(0, values[1])
+
+        def save_edited_college():
+            cid   = college_id_entry.get().strip()
+            cname = college_name_entry.get().strip()
+            if not cid or not cname:
+                messagebox.showwarning("Missing", "College Code and Name are required.")
+                return
+            for child in college_table.get_children():
+                if child != iid and college_table.item(child)["values"][0] == cid:
+                    messagebox.showerror("Duplicate", f"College Code '{cid}' already exists!")
+                    return
+
+            old_cid   = str(values[0]).strip()   # old college CODE
+            old_cname = str(values[1]).strip()   # old college NAME
+
+            # Update the college_table row (keep No. of Programs and No. of Students counts)
+            college_table.item(iid, values=(cid, cname, values[2], values[3]))
+            dm.save_colleges(college_table)
+
+            if old_cid != cid:
+                # 1. Update student_table: college column stores the CODE
+                for child in student_table.get_children():
+                    sv = list(student_table.item(child)["values"])
+                    if str(sv[4]).strip() == old_cid:
+                        sv[4] = cid
+                        student_table.item(child, values=sv)
+
+                # 2. Update program_table: college column stores the CODE.
+                #    Update any program row that references old_cid.
+                for child in program_table.get_children():
+                    pv = list(program_table.item(child)["values"])
+                    if str(pv[2]).strip() == old_cid:
+                        pv[2] = cid
+                        program_table.item(child, values=pv)
+
+                # 3. Persist to DB
+                dm.cascade_rename_college(old_cid, cid)
+                dm.save_students(student_table)
+                dm.save_programs(program_table)
+            elif old_cname != cname:
+                # Code unchanged but display name changed — no treeview code references to update,
+                # just persist the name change (already done via save_colleges above).
+                pass
+
+            dm.update_all_college_program_counts(program_table, college_table)
+            dm.update_all_program_counts(student_table, program_table)
+            dm.update_all_college_counts(student_table, college_table)
+            dm.log_action("Edited", "College", f"{cname} ({cid})")
+            refresh_college_comboboxes()
+            refresh_programs()
+            add_college_frame.grid_remove()
+            _reset_col_buttons()
+            messagebox.showinfo("Success", "College updated successfully!")
+
+        for w in btn_frame_col.winfo_children():
+            w.destroy()
+        Button(btn_frame_col, text="Update", command=save_edited_college).pack(side=RIGHT, padx=10)
+        Button(btn_frame_col, text="Cancel",
+               command=lambda: [add_college_frame.grid_remove(),
+                                _reset_col_buttons()]).pack(side=RIGHT, padx=10)
+        add_college_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+
+def _reset_prog_buttons():
+    for w in btn_frame_prog.winfo_children():
+        w.destroy()
+    ttk.Button(btn_frame_prog, text="Save", style="Pastel.TButton",
+               command=save_program).pack(side=RIGHT, padx=10)
+    ttk.Button(btn_frame_prog, text="Cancel", style="Pastel.TButton",
+               command=add_program_frame.grid_remove).pack(side=RIGHT, padx=10)
+
+
+def _reset_col_buttons():
+    for w in btn_frame_col.winfo_children():
+        w.destroy()
+    Button(btn_frame_col, text="Save",   command=save_college).pack(side=RIGHT, padx=10)
+    Button(btn_frame_col, text="Cancel", command=add_college_frame.grid_remove).pack(side=RIGHT, padx=10)
+
+
+_detached = {"students": [], "programs": [], "colleges": []}
+
+
+def search_current(*args):
+    query = search_entry.get().lower().strip()
+
+    if student_framebtn.winfo_ismapped():
+        table, key = student_table, "students"
+    elif program_framebtn.winfo_ismapped():
+        table, key = program_table, "programs"
+    elif college_framebtn.winfo_ismapped():
+        table, key = college_table, "colleges"
+    else:
         return
 
-    children = list(current_tree.get_children())
+    for iid, index in _detached[key]:
+        try:
+            table.reattach(iid, "", index)
+        except Exception:
+            pass
+    _detached[key] = []
 
     if not query:
-        if current_tree in original_orders:
-            for index, iid in enumerate(original_orders[current_tree]):
-                if iid in current_tree.get_children():
-                    current_tree.move(iid, "", index)
-
-        current_tree.selection_remove(current_tree.selection())
-        
         return
 
-    matches = []
-    non_matches = []
+    hidden = []
+    for index, iid in enumerate(table.get_children()):
+        values = " ".join(str(v) for v in table.item(iid)["values"]).lower()
+        if query not in values:
+            table.detach(iid)
+            hidden.append((iid, index))
+    _detached[key] = hidden
 
-    for child in children:
-        values = ' '.join(map(str, current_tree.item(child)['values'])).lower()
-        if query in values:
-            matches.append(child)
-        else:
-            non_matches.append(child)
 
-    for index, iid in enumerate(matches + non_matches):
-        current_tree.move(iid, "", index)
-
-    current_tree.selection_set(matches)
+def _clear_search():
+    search_entry.delete(0, END)
+    for key, table in [("students", student_table), ("programs", program_table), ("colleges", college_table)]:
+        for iid, index in _detached[key]:
+            try:
+                table.reattach(iid, "", index)
+            except Exception:
+                pass
+        _detached[key] = []
 
 
 def clear_list():
@@ -460,29 +692,23 @@ def clear_list():
 
 
 def update_programs(event):
-    selected_college_name = college_cb.get().strip()
-
-    if not selected_college_name:
+    selected_college = college_cb.get().strip()
+    if not selected_college:
         program_cb["values"] = []
         program_cb.set("")
         program_cb.config(state="disabled")
         return
 
-    selected_college_code = get_college_code_by_name(selected_college_name)
-
     programs = []
     for child in program_table.get_children():
         values = program_table.item(child)["values"]
-
         if len(values) >= 4:
-            program_college_code = str(values[2]).strip()
-
-            if program_college_code == selected_college_code:
-                programs.append(str(values[1]).strip())
+            college_value = values[2] if len(values) > 2 else ""
+            if str(college_value).strip() == selected_college:
+                programs.append(str(values[0]).strip())
 
     program_cb["values"] = sorted(programs)
     program_cb.set("")
-
     program_cb.config(state="readonly" if programs else "disabled")
 
 
@@ -598,72 +824,10 @@ def on_closing():
     dm.save_students(student_table)
     window.destroy()
 
-
-def show_history():
-    rows = dm.load_history()
-
-    hist_win = Toplevel(window)
-    hist_win.title("Action History")
-    hist_win.geometry("720x480")
-    hist_win.configure(bg="#fbfcfc")
-
-    header = tkinter.Frame(hist_win, bg="#055b65", pady=8)
-    header.pack(fill=X)
-    Label(header, text="Action History", bg="#055b65", fg="white",
-          font=("Arial", 13, "bold"), padx=14).pack(side=LEFT)
-
-    def clear_and_refresh():
-        if messagebox.askyesno("Clear History", "Clear all history? This cannot be undone.", parent=hist_win):
-            dm.clear_history()
-            tree.delete(*tree.get_children())
-
-    tkinter.Button(header, text="Clear History", bg="#e74c3c", fg="white",
-                   font=("Arial", 9, "bold"), relief=FLAT, padx=10, pady=3,
-                   cursor="hand2", command=clear_and_refresh).pack(side=RIGHT, padx=10)
-
-    frame = tkinter.Frame(hist_win, bg="#fbfcfc")
-    frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
-
-    yscroll = Scrollbar(frame, orient=VERTICAL)
-    yscroll.pack(side=RIGHT, fill=Y)
-
-    tree = ttk.Treeview(
-        frame,
-        style="Pastel.Treeview",
-        columns=("Timestamp", "Action", "Entity", "Details"),
-        show="headings",
-        yscrollcommand=yscroll.set
-    )
-    tree.heading("Timestamp", text="Timestamp")
-    tree.heading("Action",    text="Action")
-    tree.heading("Entity",    text="Entity")
-    tree.heading("Details",   text="Details")
-    tree.column("Timestamp", width=140, anchor="center")
-    tree.column("Action",    width=70,  anchor="center")
-    tree.column("Entity",    width=80,  anchor="center")
-    tree.column("Details",   width=380)
-    yscroll.config(command=tree.yview)
-    tree.pack(fill=BOTH, expand=True)
-
-    for i, row in enumerate(rows):
-        tag = "even" if i % 2 == 0 else "odd"
-        tree.insert("", END, values=(row[0], row[1], row[2], row[3]), tags=(tag,))
-    tree.tag_configure("odd",  background="#f5fafa")
-    tree.tag_configure("even", background="#ffffff")
-
-    if not rows:
-        Label(hist_win, text="No history yet.", bg="#fbfcfc",
-              font=("Arial", 11, "italic"), fg="#888").pack(pady=20)
-
-
 def logout():
     if messagebox.askyesno("Logout", "Are you sure you want to exit?"):
         dm.save_students(student_table)
         window.destroy()
-
-def store_original_order(tree):
-    global original_orders
-    original_orders[tree] = list(tree.get_children())
 # ─────────────────────────────────────────────────────────────
 #  MAIN WINDOW SETUP
 # ─────────────────────────────────────────────────────────────
@@ -673,12 +837,6 @@ window.geometry("1100x619")
 window.title("Student Management System")
 #window.iconphoto(False, PhotoImage(file=""))
 window.configure(bg="#fbfcfc")
-
-window.columnconfigure(0, weight=1)
-window.columnconfigure(1, weight=3)
-window.rowconfigure(0, weight=1)
-
-# Style
 
 style = Style()
 style.theme_use('clam')
@@ -704,14 +862,24 @@ style.map("Pastel.Treeview",
 # Required note
 style.configure("RedNote.TLabel", font=("Segoe UI", 10, "italic"), foreground="#e74c3c")
 
+
+
+
+
+
+
+window.columnconfigure(0, weight=1)
+window.columnconfigure(1, weight=3)
+window.rowconfigure(0, weight=1)
+
 # ── Info and CRUDL Button Frame ──────────────────────────────
 Info_btn_frame = tkinter.Frame(window, bg="#fbfcfc")
 Info_btn_frame.grid(row=0, column=1, sticky="nsew", padx=(0,10), pady=0)
 
-Info_btn_frame.rowconfigure(0, weight=1)
-Info_btn_frame.rowconfigure(1, weight=15)
+Info_btn_frame.rowconfigure(0, weight=0)
+Info_btn_frame.rowconfigure(1, weight=1)
 Info_btn_frame.columnconfigure(0, weight=1)
-Info_btn_frame.rowconfigure(2, weight=1)
+Info_btn_frame.rowconfigure(2, weight=0)
 
 search_frame = tkinter.Frame(Info_btn_frame, bg="#055b65")
 search_frame.grid(row=0, column=0, sticky="nsew", ipadx=20, pady=5)
@@ -936,15 +1104,21 @@ navframe.rowconfigure(0, weight=1)
 navframe.rowconfigure(1, weight=5)
 navframe.columnconfigure(0, weight=1)
 
+logo = Image.open("logo.png")
+logo  = logo.resize((200, 200))
+logo = ImageTk.PhotoImage(logo)
+
 logo_frame = tkinter.Frame(navframe, bg="#e0e5e9")
 logo_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 5))
+
+my_logo = Label(logo_frame, image=logo, bg="#e0e5e9")
+my_logo.pack(pady=0)
 
 nav_btn_frame = tkinter.Frame(navframe, bg="#e0e5e9")
 nav_btn_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
 # ── Search Frame ─────────────────────────────────────────────
 search_entry = Entry(search_frame)
-search_entry.bind("<KeyRelease>", lambda e: search_current())
 search_entry.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 
 search_button = ttk.Button(search_frame, text="Search", style="Pastel.TButton", width=10, command=search_current)
@@ -963,11 +1137,11 @@ college_btn.pack(side=TOP, fill=X, padx=5, pady=5)
 logout_btn  = ttk.Button(nav_btn_frame, text="Logout",  style="Pastel.TButton", width=10, command=logout)
 logout_btn.pack(side=BOTTOM, fill=X, padx=5, pady=5)
 
-history_btn = ttk.Button(nav_btn_frame, text="History", style="Pastel.TButton", width=10, command=show_history)
-history_btn.pack(side=BOTTOM, fill=X, padx=5, pady=5)
-
 add_btn    = ttk.Button(btn_frame, text="Add Student", style="Pastel.TButton", width=15,  command=add_student)
 add_btn.pack(side=RIGHT, padx=5, pady=5)
+
+edit_btn   = ttk.Button(btn_frame, text="Edit", style="Pastel.TButton", width=15, command=edit_item)
+edit_btn.pack(side=RIGHT, padx=5, pady=5)
 
 delete_btn = ttk.Button(btn_frame, text="Delete", style="Pastel.TButton", width=15,  command=delete_item)
 delete_btn.pack(side=RIGHT, padx=5, pady=5)
@@ -978,6 +1152,7 @@ clear_btn.pack(side=RIGHT, padx=5, pady=5)
 # ── Program List Treeview ────────────────────────────────────
 program_framebtn = Frame(info_frame, bg="lightblue", relief=RAISED, bd=2)
 program_framebtn.grid(row=0, column=0, sticky="nsew")
+program_framebtn.grid_propagate(True)
 
 Label(program_framebtn, text="Program List", bg="#055b65", highlightthickness=0, relief="flat", fg="white",
       font=("Arial", 14, "bold"), pady=8).pack(side=TOP, fill=X)
@@ -994,7 +1169,7 @@ program_table = ttk.Treeview(
 )
 program_table.heading("Program ID",      text="Program ID")
 program_table.heading("Program Name",    text="Program Name")
-program_table.heading("College",         text="College")
+program_table.heading("College",         text="College Code")
 program_table.heading("No. of Students", text="No. of Students")
 program_table.column("Program ID",      width=100)
 program_table.column("Program Name",    width=200)
@@ -1010,6 +1185,7 @@ program_table.pack(side=LEFT, fill=BOTH, expand=True)
 # ── College List Treeview ────────────────────────────────────
 college_framebtn = Frame(info_frame, bg="#fbfcfc", relief=RAISED, bd=2)
 college_framebtn.grid(row=0, column=0, sticky="nsew")
+college_framebtn.grid_propagate(True)
 
 Label(college_framebtn, text="College List", bg="#055b65", highlightthickness=0, relief="flat", fg="white",
       font=("Arial", 14, "bold"), pady=8).pack(side=TOP, fill=X)
@@ -1042,6 +1218,7 @@ for col in college_table["columns"]:
 # ── Student List Treeview ────────────────────────────────────
 student_framebtn = Frame(info_frame, bg="#055b65", relief=FLAT, bd=2)
 student_framebtn.grid(row=0, column=0, sticky="nsew")
+student_framebtn.grid_propagate(True)
 
 y_scroll = Scrollbar(student_framebtn, orient=VERTICAL)
 y_scroll.pack(side=RIGHT, fill=Y)
@@ -1061,8 +1238,8 @@ student_table = ttk.Treeview(
 student_table.heading("ID",         text="Student ID")
 student_table.heading("Name",       text="Name")
 student_table.heading("Year Level", text="Year Level")
-student_table.heading("Program",    text="Program")
-student_table.heading("College",    text="College")
+student_table.heading("Program",    text="Program Code")
+student_table.heading("College",    text="College Code")
 student_table.heading("View",       text="")
 
 student_table.column("ID",         width=100)
@@ -1072,7 +1249,6 @@ student_table.column("Program",    width=100)
 student_table.column("College",    width=100)
 student_table.column("View",       width=80, anchor="center")
 
-y_scroll.config(command=student_table.yview)
 for col in student_table["columns"]:
     if col != "View":
         student_table.heading(col, command=lambda c=col: treeview_sort_column(student_table, c, False))
@@ -1083,10 +1259,6 @@ for col in ["DOB", "Sex", "Contact", "Email", "Address"]:
 student_table.pack(side=LEFT, fill=BOTH, expand=True)
 student_table.bind("<Button-1>", on_tree_click)
 
-# App db with data
-dm.init_db()
-dm.seed_db()
-
 # ── Load data ────────────────────────────────────────────────
 dm.load_colleges(college_table)
 dm.load_programs(program_table)
@@ -1095,10 +1267,7 @@ dm.load_students(
     update_all_program_counts_fn=lambda: dm.update_all_program_counts(student_table, program_table),
     update_all_college_counts_fn=lambda: dm.update_all_college_counts(student_table, college_table)
 )
-
-store_original_order(student_table)
-store_original_order(program_table)
-store_original_order(college_table)
+dm.update_all_college_program_counts(program_table, college_table)
 
 refresh_college_comboboxes()
 refresh_programs()

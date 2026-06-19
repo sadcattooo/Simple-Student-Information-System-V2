@@ -92,7 +92,7 @@ def load_colleges(college_table):
                 COUNT(DISTINCT s.id)   AS stu_count
             FROM college AS c
             LEFT JOIN program AS p ON p.college_code = c.code
-            LEFT JOIN student AS s ON s.college = c.name
+            LEFT JOIN student AS s ON s.college = c.code
             GROUP BY c.code, c.name
             ORDER BY c.name
         """).fetchall()
@@ -108,17 +108,17 @@ def load_programs(program_table):
             SELECT
                 p.code         AS pcode,
                 p.name         AS pname,
-                p.college_code AS pcollege,
+                p.college_code AS pcollege_code,
                 COUNT(s.id)    AS stu_count
             FROM program AS p
-            LEFT JOIN student AS s ON s.program = p.name
+            LEFT JOIN student AS s ON s.program = p.code
             GROUP BY p.code, p.name, p.college_code
             ORDER BY p.name
         """).fetchall()
     for row in rows:
         program_table.insert("", "end",
                              values=(row["pcode"], row["pname"],
-                                     row["pcollege"], row["stu_count"]))
+                                     row["pcollege_code"] or "", row["stu_count"]))
 
 
 def load_students(student_table, update_all_program_counts_fn, update_all_college_counts_fn):
@@ -156,9 +156,12 @@ def save_students(student_table):
 
 def save_programs(program_table):
     try:
-        rows = [program_table.item(c)["values"][:3]
-                for c in program_table.get_children()]
         with get_connection() as conn:
+            rows = []
+            for c in program_table.get_children():
+                v = program_table.item(c)["values"][:3]
+                prog_code, prog_name, college_code = v[0], v[1], str(v[2]).strip()
+                rows.append((prog_code, prog_name, college_code))
             conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("DELETE FROM program")
             conn.executemany(
@@ -188,16 +191,32 @@ def save_colleges(college_table):
 
 # ── Data Count ─────────────────────────────────────────────
 
-def update_program_student_count(program_name, student_table, program_table):
-    if not program_name:
+def update_all_college_program_counts(program_table, college_table):
+    """Recalculate No. of Programs column for every college row."""
+    count_map = {}
+    for c in program_table.get_children():
+        v = program_table.item(c)["values"]
+        if len(v) >= 3:
+            col = str(v[2]).strip()   # holds college CODE
+            if col and col.lower() != "null":
+                count_map[col] = count_map.get(col, 0) + 1
+    for c in college_table.get_children():
+        v = college_table.item(c)["values"]
+        if len(v) >= 4:
+            ccode = str(v[0]).strip()   # match by college CODE
+            college_table.item(c, values=(v[0], v[1], str(count_map.get(ccode, 0)), v[3]))
+
+
+def update_program_student_count(program_code, student_table, program_table):
+    if not program_code:
         return
     count = sum(
         1 for c in student_table.get_children()
-        if str(student_table.item(c)["values"][3]).strip() == program_name.strip()
+        if str(student_table.item(c)["values"][3]).strip() == program_code.strip()
     )
     for c in program_table.get_children():
         v = program_table.item(c)["values"]
-        if str(v[1]).strip() == program_name.strip():
+        if str(v[0]).strip() == program_code.strip():
             program_table.item(c, values=(v[0], v[1], v[2], str(count)))
             break
 
@@ -211,19 +230,19 @@ def update_all_program_counts(student_table, program_table):
     for c in program_table.get_children():
         v = program_table.item(c)["values"]
         program_table.item(c, values=(v[0], v[1], v[2],
-                                      str(counts.get(str(v[1]).strip(), 0))))
+                                      str(counts.get(str(v[0]).strip(), 0))))
 
 
-def update_college_student_count(college_name, student_table, college_table):
-    if not college_name:
+def update_college_student_count(college_code, student_table, college_table):
+    if not college_code:
         return
     count = sum(
         1 for c in student_table.get_children()
-        if str(student_table.item(c)["values"][4]).strip() == college_name.strip()
+        if str(student_table.item(c)["values"][4]).strip() == college_code.strip()
     )
     for c in college_table.get_children():
         v = college_table.item(c)["values"]
-        if str(v[1]).strip() == college_name.strip():
+        if str(v[0]).strip() == college_code.strip():
             college_table.item(c, values=(v[0], v[1], v[2], str(count)))
             break
 
@@ -237,7 +256,31 @@ def update_all_college_counts(student_table, college_table):
     for c in college_table.get_children():
         v = college_table.item(c)["values"]
         college_table.item(c, values=(v[0], v[1], v[2],
-                                      str(counts.get(str(v[1]).strip(), 0))))
+                                      str(counts.get(str(v[0]).strip(), 0))))
+
+
+# ── Cascade Rename ────────────────────────────────────────────
+
+def cascade_rename_program(old_code: str, new_code: str):
+    """When a program's code changes, update every student row that references it."""
+    if old_code == new_code:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE student SET program = ? WHERE program = ?",
+            (new_code, old_code)
+        )
+
+
+def cascade_rename_college(old_code: str, new_code: str):
+    """When a college's code changes, update every student row that references it."""
+    if old_code == new_code:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE student SET college = ? WHERE college = ?",
+            (new_code, old_code)
+        )
 
 
 # ── seed ──────────────────────────────────────────────────────
@@ -272,12 +315,11 @@ def seed_db():
                 existing.add(sid)
 
                 prog_code, prog_name, col_code = random.choice(SEED_PROGRAMS)
-                col_name   = next(c[1] for c in SEED_COLLEGES if c[0] == col_code)
                 fullname   = f"{random.choice(SEED_FIRSTNAMES)} {random.choice(SEED_LASTNAMES)}"
                 year_level = random.choice(year_levels)
                 sex        = random.choices(sexes, weights=[48, 48, 4])[0]
 
-                batch.append((sid, fullname, year_level, prog_name, col_name,
+                batch.append((sid, fullname, year_level, prog_code, col_code,
                               "", sex, "", "", ""))
 
                 if len(batch) >= 500:
